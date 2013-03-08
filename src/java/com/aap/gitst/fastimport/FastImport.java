@@ -99,7 +99,7 @@ public class FastImport {
         final ItemFilter filter = new ItemFilter(
                 props.getMetaProperty(META_PROP_ITEM_FILTER));
         final IntermediateListener iListener = new IntermediateListener();
-        final ViewListener vListener = new ViewListener(filter);
+        final ViewListener vListener = new ViewListener(filter, v);
         final ViewConfigurationDiffer diff = new ViewConfigurationDiffer(v);
         long time;
 
@@ -261,8 +261,8 @@ public class FastImport {
         final RepoProperties props = repo.getRepoProperties();
         final int maxc = Integer.parseInt(props.getProperty(
                 PROP_MAXCONNECTIONS, PROP_DEFAULT_MAXCONNECTIONS));
-        final Folder rootFolder = repo.getRootFolder();
-        Folder recycleRootFolder = null;
+        final Folder rootFolder = repo.getRootFolder(repo.getView());
+        List<Folder> recycleRootFolders = new ArrayList<Folder>();
         final boolean skipDeleted = !"false".equalsIgnoreCase(System
                 .getenv("GITST_SKIP_DELETED"));
         final Type type = repo.getServer().typeForName("File");
@@ -281,14 +281,28 @@ public class FastImport {
         }
 
         if (!skipDeleted) {
-            final RecycleBin recycle = repo.getView().getRecycleBin();
-            recycleRootFolder = repo.getRootFolder(recycle);
-            time = System.currentTimeMillis();
-            _log.info("Loading deleted files tree");
-            recycleRootFolder.populateNow("File", FILE_PROPS, -1);
-            recycleRootFolder.populateNow("Folder", FOLDER_PROPS, -1);
-            recycleCount = (int) recycleRootFolder.countItems(type, -1);
-
+        	View view = repo.getView();
+        	
+        	// FIXME: I'm using an arbitrary "root" of the first level views, so !view.isRoot() is just a hack
+        	// you should probably be able to specify which view is the root
+        	while (view != null && !view.isRoot()) {
+	            _log.info("Loading deleted files tree (" + view.getName() + ")");
+	            final RecycleBin recycle = view.getRecycleBin();
+	            Folder recycleRootFolder = repo.getRootFolder(recycle);
+	            recycleRootFolders.add(recycleRootFolder);
+	            time = System.currentTimeMillis();
+	            recycleRootFolder.populateNow("File", FILE_PROPS, -1);
+	            recycleRootFolder.populateNow("Folder", FOLDER_PROPS, -1);
+	            recycleCount += (int) recycleRootFolder.countItems(type, -1);
+	            OLEDate ctime = view.getCreatedTime();
+	            if (!view.isBranch())
+	            	break;
+	            View child = view;
+	            view = child.getParentView();
+	            if (view != null)
+	            	view = new View(view, ViewConfiguration.createFromTime(ctime));
+        	}
+        	
             if (_log.isDebugEnabled()) {
                 _log.debug("Deleted files tree loaded in "
                         + (System.currentTimeMillis() - time) + " ms.");
@@ -318,20 +332,22 @@ public class FastImport {
         }
 
         if (!skipDeleted) {
-            if (!_log.isProgressBarSupported()) {
-                _log.info("Loading deleted files history");
-            }
-
-            threadPool = createThreadPool(Math.min(maxc,
-                    (recycleCount * 6) / 1000));
-            pb = _log.createProgressBar("Loading deleted files history",
-                    recycleCount);
-            time = System.currentTimeMillis();
-            loadHistory(filter, commits, recycleRootFolder, threadPool, pb,
-                    history, list, true);
-            threadPool.shutdown();
-            threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-            pb.complete();
+        	for (Folder recycleRootFolder : recycleRootFolders) {
+	            if (!_log.isProgressBarSupported()) {
+	                _log.info("Loading deleted files history");
+	            }
+	
+	            threadPool = createThreadPool(Math.min(maxc,
+	                    (recycleCount * 6) / 1000));
+	            pb = _log.createProgressBar("Loading deleted files history (" + recycleRootFolder.getView().getName() + ")",
+	                    recycleCount);
+	            time = System.currentTimeMillis();
+	            loadHistory(filter, commits, recycleRootFolder, threadPool, pb,
+	                    history, list, true);
+	            threadPool.shutdown();
+	            threadPool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+	            pb.complete();
+        	}
 
             if (_log.isDebugEnabled()) {
                 _log.debug("Deleted files history loaded in "
@@ -757,13 +773,14 @@ public class FastImport {
             ItemUpdateListener {
         private final ConcurrentMap<CommitId, Commit> _commits = new ConcurrentSkipListMap<>();
         private final ItemFilter _filter;
-        private final Folder _rootFolder = _repo.getRootFolder();
+        private final Folder _rootFolder;
         private final boolean _verbose = _log.isDebugEnabled();
         private final boolean _skipEmptyFolders = "true".equalsIgnoreCase(System
                 .getenv("GIST_SKIP_EMPTY_FOLDERS"));
 
-        public ViewListener(final ItemFilter filter) {
+        public ViewListener(final ItemFilter filter, final View view) {
             _filter = filter;
+            _rootFolder = _repo.getRootFolder(view);
         }
 
         public Map<CommitId, Commit> getCommits() throws InterruptedException {

@@ -17,6 +17,8 @@ import java.io.File;
 import java.io.IOException;
 import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.StringTokenizer;
@@ -31,6 +33,7 @@ import com.starbase.starteam.Folder;
 import com.starbase.starteam.Item;
 import com.starbase.starteam.LogonException;
 import com.starbase.starteam.Project;
+import com.starbase.starteam.RecycleBin;
 import com.starbase.starteam.Server;
 import com.starbase.starteam.ServerInfo;
 import com.starbase.starteam.StarTeamFinder;
@@ -60,7 +63,8 @@ public class Repo implements AutoCloseable {
     private final MessageFormat _commentFormat;
     private volatile List<Pattern> _ignoreFiles;
     private View _view;
-    private Folder _rootFolder;
+    private String _rootFolderPath;
+    private Map<Integer,Folder> _rootFolders;
     private File _tempDir;
 
     public Repo(final RepoProperties repoProperties, final Logger logger) {
@@ -195,8 +199,8 @@ public class Repo implements AutoCloseable {
         if (_view == null) {
             final RepoProperties props = getRepoProperties();
             final StarTeamURL url = getUrl();
-            final String project = url.getProjectName();
-            final String view = getViewName(url);
+            final String urlProject = url.getProjectName();
+            final String urlPath = url.getPath();
             final Server server = getIdleConnection();
             boolean ok = false;
 
@@ -213,11 +217,17 @@ public class Repo implements AutoCloseable {
                     final String host = url.getHostName();
                     getLogger().info(
                             "Connecting to " + host + ':' + port + '/'
-                                    + project + '/' + view);
+                                    + urlProject + '/' + urlPath);
                 }
 
-                _view = findView(findProject(server, project), view);
-                _rootFolder = getRootFolder(url, _view);
+                Project project = findProject(server, urlProject);
+                findViewByFullName(project, urlPath);
+                if (_view == null)
+                	findViewByName(project, urlPath);
+                if (_view == null)
+                	throw new ConfigurationException("Cannot find a view using " + urlPath);
+                
+                _rootFolders = new HashMap<Integer,Folder>();
                 ok = true;
             } finally {
                 if (ok) {
@@ -236,7 +246,7 @@ public class Repo implements AutoCloseable {
     public synchronized void close() {
         if (_view != null) {
             _view = null;
-            _rootFolder = null;
+            _rootFolders = null;
             _pool.clear();
             _viewCache.clear();
         }
@@ -295,15 +305,17 @@ public class Repo implements AutoCloseable {
         return v;
     }
 
-    public synchronized Folder getRootFolder() {
-        if (_rootFolder == null) {
+    public synchronized Folder getRootFolder(View view) {
+        if (_rootFolders == null) {
             connect();
         }
-        return _rootFolder;
-    }
-
-    public Folder getRootFolder(final View v) {
-        return getRootFolder(getUrl(), v);
+        int viewId = view.getID();
+        if (view instanceof RecycleBin)
+        	viewId |= 0x10000000;
+        Folder root = _rootFolders.get(viewId);
+        if (root == null)
+        	_rootFolders.put(viewId, root = getRootFolder(_rootFolderPath, view));
+        return root;
     }
 
     public synchronized File getTempDir() throws IOException {
@@ -366,7 +378,7 @@ public class Repo implements AutoCloseable {
         Folder f = _folderCache.get(path);
 
         if (f == null) {
-            final Folder root = getRootFolder();
+            final Folder root = getRootFolder(getView());
             f = StarTeamFinder.findFolder(root, path);
 
             if (f != null) {
@@ -381,7 +393,7 @@ public class Repo implements AutoCloseable {
         final int slash = path.lastIndexOf('/');
 
         if (slash == -1) {
-            return getRootFolder();
+            return getRootFolder(getView());
         } else {
             return getFolder(path.substring(0, slash));
         }
@@ -397,7 +409,7 @@ public class Repo implements AutoCloseable {
 
             if (slash == -1) {
                 name = path;
-                folder = getRootFolder();
+                folder = getRootFolder(getView());
             } else {
                 name = path.substring(slash + 1);
                 folder = getFolder(path.substring(0, slash));
@@ -421,7 +433,7 @@ public class Repo implements AutoCloseable {
         Folder f = _folderCache.get(path);
 
         if (f == null) {
-            final Folder root = getRootFolder();
+            final Folder root = getRootFolder(getView());
             f = StarTeamFinder.findFolder(root, path);
 
             if (f == null) {
@@ -455,7 +467,7 @@ public class Repo implements AutoCloseable {
 
             if (slash == -1) {
                 name = path;
-                folder = getRootFolder();
+                folder = getRootFolder(getView());
             } else {
                 name = path.substring(slash + 1);
                 folder = getOrCreateFolder(path.substring(0, slash));
@@ -531,9 +543,12 @@ public class Repo implements AutoCloseable {
         cio.setCheckinReason(reason);
         return view.createCheckinManager(cio);
     }
+    
+    public boolean isRootFolder(Folder folder) {
+    	return folder.equals(getRootFolder(folder.getView()));
+    }
 
     public String getPath(final Item i) {
-        final Folder root = getRootFolder();
         final StringBuilder path = new StringBuilder();
 
         if (i instanceof com.starbase.starteam.File) {
@@ -544,7 +559,7 @@ public class Repo implements AutoCloseable {
             throw new IllegalArgumentException("Unsupported item: " + i);
         }
 
-        for (Folder f = i.getParentFolder(); (f != null) && !f.equals(root); f = f
+        for (Folder f = i.getParentFolder(); (f != null) && !isRootFolder(f); f = f
                 .getParentFolder()) {
             path.insert(0, '/').insert(0, f.getName());
         }
@@ -607,8 +622,9 @@ public class Repo implements AutoCloseable {
     }
 
     private static Project findProject(final Server s, final String name) {
+    	boolean byId = name.contains(";scheme=id");
         for (final Project p : s.getProjects()) {
-            if (name.equals(p.getName())) {
+            if ((byId && name.startsWith(p.getID() + ";")) || name.equals(p.getName())) {
                 return p;
             }
         }
@@ -616,14 +632,36 @@ public class Repo implements AutoCloseable {
         throw new ConfigurationException("No such project: " + name);
     }
 
-    private static View findView(final Project p, final String name) {
+    private void findViewByName(final Project p, final String urlPath) {
+    	String viewName = urlPath;
+    	int slash = viewName.indexOf('/');
+    	viewName = viewName.substring(0, slash == -1 ? viewName.length() : slash);
         for (final View v : p.getViews()) {
-            if (name.equals(v.getName())) {
-                return v;
+            if (viewName.equals(v.getName())) {
+            	_view = v;
+            	_rootFolderPath = urlPath.substring(slash + 1);
+            	return;
             }
         }
-
-        throw new ConfigurationException("No such view: " + name);
+    }
+    
+    private void findViewByFullName(final Project p, final String urlPath) {
+    	int longest = 0;
+    	for (final View v : p.getViews()) {
+    		String fullName = v.getFullName();
+    		if (urlPath.equals(fullName)) {
+    			_view = v;
+    			_rootFolderPath = "";
+    			return;
+    		}
+    		else if (urlPath.startsWith(fullName + "/")) {
+    			if (fullName.length() > longest) {
+	    			longest = fullName.length();
+	    			_view = v;
+	    			_rootFolderPath = urlPath.substring(fullName.length() + 1);
+    			}
+    		}
+    	}
     }
 
     private static String getFileName(final String path) {
@@ -642,7 +680,7 @@ public class Repo implements AutoCloseable {
         final int slash = path.lastIndexOf('/');
 
         if (slash == -1) {
-            return getRootFolder();
+            return getRootFolder(getView());
         } else {
             return getOrCreateFolder(path.substring(0, slash));
         }
@@ -656,50 +694,21 @@ public class Repo implements AutoCloseable {
         return f;
     }
 
-    private static String getViewName(final StarTeamURL url) {
-        final String src = url.getSource();
-        final String proj = '/' + url.getProjectName() + '/';
-        int ind = src.indexOf(proj);
-
-        if (ind != -1) {
-            String view = src.substring(ind + proj.length());
-
-            ind = view.indexOf('/');
-
-            if (ind != -1) {
-                view = view.substring(0, ind);
-            }
-
-            return view;
-        }
-
-        return "main";
-    }
-
-    private static Folder getRootFolder(final StarTeamURL url, final View v) {
+    private static Folder getRootFolder(final String path, final View v) {
         Folder f = v.getRootFolder();
-        boolean skipViewName = true;
+        String name = "/";
+        stLoop: for (StringTokenizer st = new StringTokenizer(path); st.hasMoreElements();) {
+        	name = st.nextToken();
 
-        stLoop: for (final StringTokenizer st = url.getFolders(); st
-                .hasMoreTokens();) {
-            final String name = st.nextToken();
-
-            if (skipViewName) {
-                skipViewName = false;
-                if (name.equals(v.getName())) {
-                    continue;
-                }
-            }
-
-            for (final Folder sub : f.getSubFolders()) {
+        	for (final Folder sub : f.getSubFolders()) {
                 if (name.equals(sub.getName())) {
                     f = sub;
                     continue stLoop;
                 }
             }
-
-            throw new IllegalArgumentException("Invalid url '"
-                    + url.getSource() + "': folder " + name
+        	
+            throw new IllegalArgumentException("Invalid path '"
+                    + path + "': folder " + name
                     + " does not exist.");
         }
 

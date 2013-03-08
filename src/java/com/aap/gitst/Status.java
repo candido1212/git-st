@@ -89,7 +89,7 @@ public class Status {
     public void print() throws IOException, InterruptedException {
         final Repo repo = getRepo();
         final View v = repo.connect();
-        final Folder rootFolder = repo.getRootFolder();
+        final Folder rootFolder = repo.getRootFolder(v);
         final Set<File> localFiles = new HashSet<>();
 
         if (_log.isDebugEnabled()) {
