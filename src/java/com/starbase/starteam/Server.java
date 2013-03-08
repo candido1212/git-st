@@ -79,11 +79,20 @@ import com.starbase.util.WintelOptions;
 import com.starbase.util.XMLUtils;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.util.Collections;
 import java.util.Hashtable;
+import java.util.Map;
 import java.util.WeakHashMap;
 
+/**
+ * Pulled starteam library implementation of this class to remove a race
+ * condition with use of WeakHashMap in cloak()
+ * 
+ * @author Warren Falk <warren@warrenfalk.com>
+ * 
+ */
 public class Server {
-    private static Hashtable m_servers = new Hashtable();
+    private static Hashtable<Server, Hashtable<Class<?>, Map<Object, Object>>> m_servers = new Hashtable<Server, Hashtable<Class<?>, Map<Object, Object>>>();
     private static Hashtable m_constructors = new Hashtable();
     private static Hashtable m_methods = new Hashtable();
     protected com.borland.starteam.impl.Server m_wrap = null;
@@ -153,12 +162,16 @@ public class Server {
     static Object cloak(Server paramServer, Class paramClass1,
             Class paramClass2, Object paramObject) {
         if (!m_servers.containsKey(paramServer))
-            m_servers.put(paramServer, new Hashtable());
-        Hashtable localHashtable = (Hashtable) m_servers.get(paramServer);
-        if (!localHashtable.containsKey(paramClass1))
-            localHashtable.put(paramClass1, new WeakHashMap());
-        WeakHashMap localWeakHashMap = (WeakHashMap) localHashtable
-                .get(paramClass1);
+            m_servers.put(paramServer,
+                    new Hashtable<Class<?>, Map<Object, Object>>());
+        Hashtable<Class<?>, Map<Object, Object>> localHashtable = m_servers
+                .get(paramServer);
+        if (!localHashtable.containsKey(paramClass1)) {
+            WeakHashMap<Object, Object> whm = new WeakHashMap<Object, Object>();
+            Map<Object, Object> syncMap = Collections.synchronizedMap(whm);
+            localHashtable.put(paramClass1, syncMap);
+        }
+        Map<Object, Object> localWeakHashMap = localHashtable.get(paramClass1);
         Object localObject1 = null;
         Object localObject2;
         if (localWeakHashMap.containsKey(paramObject)) {
