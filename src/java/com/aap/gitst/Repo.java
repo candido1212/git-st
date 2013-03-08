@@ -66,6 +66,7 @@ public class Repo implements AutoCloseable {
     private String _rootFolderPath;
     private Map<Integer,Folder> _rootFolders;
     private File _tempDir;
+    private File _cacheDir;
 
     public Repo(final RepoProperties repoProperties, final Logger logger) {
         _branchName = repoProperties.getBranchName();
@@ -330,6 +331,20 @@ public class Repo implements AutoCloseable {
             Runtime.getRuntime().addShutdownHook(new DeleteHook(_tempDir));
         }
         return _tempDir;
+    }
+    
+    public synchronized File getCacheDir() throws IOException {
+        if (_cacheDir == null) {
+        	File homeDir = new File(System.getProperty("user.home"));
+        	File cacheDir = new File(new File(homeDir, ".git-st"), "cache");
+        	_cacheDir = cacheDir;
+
+            if (!_cacheDir.isDirectory() && !_cacheDir.mkdirs()) {
+                throw new IOException("Failed to create directory: "
+                        + _cacheDir.getAbsolutePath());
+            }
+        }
+        return _cacheDir;
     }
 
     public File createTempFile(final String path) throws IOException {

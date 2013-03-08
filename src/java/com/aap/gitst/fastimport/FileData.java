@@ -69,7 +69,7 @@ public class FileData implements FastimportCommand {
                 s.write(buffer, 0, i);
             }
         } finally {
-            file.delete();
+            //file.delete();
         }
     }
 }

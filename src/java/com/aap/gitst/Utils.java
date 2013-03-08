@@ -1,5 +1,6 @@
 package com.aap.gitst;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -12,13 +13,20 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import com.aap.gitst.Logger.ProgressBar;
+import com.aap.gitst.fastimport.FileData;
 import com.borland.starteam.impl.Internals;
+import com.borland.starteam.impl.MakeVisible;
+import com.borland.starteam.impl._private_.WfCheckOutInputStream;
+import com.borland.starteam.impl._private_.vts.pickle.ViewMemberConfig;
 import com.starbase.starteam.CheckoutListener;
 import com.starbase.starteam.CheckoutManager;
 import com.starbase.starteam.Item;
 import com.starbase.starteam.ItemList;
+import com.starbase.starteam.Server;
 import com.starbase.util.OLEDate;
 
 /**
@@ -143,43 +151,96 @@ public class Utils {
             return Internals.getHistory(repo, i);
         }
     }
-
-    public static void checkout(final Repo repo, final ItemList items,
-            final CheckoutListener listener) throws InterruptedException {
+    
+    public static void checkout(final Repo repo, final ItemList items, 
+            final Map<RemoteFile, List<FileData>> filesMap, ProgressBar pbar) throws InterruptedException {
         if (isApi12()) {
-            checkout12(repo, items, listener);
+            //checkout12(repo, items, filesMap);
         } else {
-            final CheckoutManager mgr = repo.createCheckoutManager();
-            mgr.addCheckoutListener(listener);
-            mgr.checkout(items);
+            //final CheckoutManager mgr = repo.createCheckoutManager();
+            //mgr.addCheckoutListener(listener);
+            int count = items.size();
+            Server server = repo.getIdleConnection();
+            byte[] buffer = new byte[16384];
+            for (int i = 0; i < count; i++) {
+                Item item = items.getAt(i);
+                final RemoteFile id = new RemoteFile((com.starbase.starteam.File)item);
+                final List<FileData> fileData = filesMap.get(id);
+                File cacheFile;
+                try {
+                    byte[] md5b = ((com.starbase.starteam.File)item).getMD5();
+                    String md5 = toMd5String(md5b);
+                    String fldr = md5.substring(md5.length() - 2, md5.length());
+                    cacheFile = new File(new File(repo.getCacheDir(), fldr), md5);
+                    ProgressBar fpbar = null;
+                    if (!cacheFile.isFile()) {
+                        int size = ((com.starbase.starteam.File)item).getSize();
+                        if (size > 1 << 20)
+                            fpbar = repo.getLogger().createProgressBar(repo.getPath(item), size);
+                        ViewMemberConfig vmconfig = new ViewMemberConfig();
+                        vmconfig.setRevision(item.getObjectID(), item.getRevisionNumber());
+                        File tempFile = new File(cacheFile.getPath() + "~");
+                        WfCheckOutInputStream s = new WfCheckOutInputStream(
+                                server, 
+                                item.getID(), 
+                                MakeVisible.classFile_getRoutingComponentID((com.starbase.starteam.File)item),
+                                MakeVisible.classServer_getViewSession(server, item.getView()).getID(), 
+                                false, 
+                                vmconfig,
+                                null, 
+                                null, 
+                                false, 
+                                false);
+                        try {
+                            int len;
+                            int total = 0;
+                            File dir = cacheFile.getParentFile();
+                            if (!dir.isDirectory())
+                                dir.mkdirs();
+                            FileOutputStream out = new FileOutputStream(tempFile);
+                            try {
+                                while (-1 != (len = s.read(buffer, 0, buffer.length))) {
+                                    out.write(buffer, 0, len);
+                                    total += len;
+                                    if (fpbar != null)
+                                        fpbar.done(total);
+                                }
+                            }
+                            finally {
+                                out.close();
+                            }
+                        }
+                        finally {
+                            s.close();
+                        }
+                        tempFile.renameTo(cacheFile);
+                        if (fpbar != null)
+                            fpbar.complete();
+                    }
+                    if (fileData.size() == 1) {
+                        fileData.get(0).setCheckout(cacheFile);
+                    }
+                    else {
+                        System.err.println(fileData.size());
+                    }
+                }
+                catch (IOException ioe) {
+                    ioe.printStackTrace();
+                }
+                pbar.done(i + 1);
+            }
+            pbar.complete();
         }
     }
-
-    @SuppressWarnings("unchecked")
-    private static void checkout12(final Repo repo, final ItemList items,
-            final CheckoutListener listener) throws InterruptedException {
-        final List<Set<Item>> l = new ArrayList<>();
-
-        itemsLoop: for (final Enumeration<Item> en = items.elements(); en
-                .hasMoreElements();) {
-            final Item i = en.nextElement();
-
-            for (final Set<Item> set : l) {
-                if (!set.contains(i)) {
-                    set.add(i);
-                    continue itemsLoop;
-                }
-            }
-
-            final Set<Item> set = new HashSet<>();
-            set.add(i);
-            l.add(set);
+    
+    private static final char[] hexchar = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' }; 
+    
+    private static String toMd5String(byte[] md5) {
+        char[] chars = new char[md5.length * 2];
+        for (int i = 0; i < md5.length; i++) {
+            chars[i * 2] = hexchar[(md5[i] & 0xF0) >> 4];
+            chars[i * 2 + 1] = hexchar[md5[i] & 0xF];
         }
-
-        for (final Set<Item> set : l) {
-            final CheckoutManager mgr = repo.createCheckoutManager();
-            mgr.addCheckoutListener(listener);
-            mgr.checkout(set.toArray(new Item[set.size()]));
-        }
+        return new String(chars);
     }
 }

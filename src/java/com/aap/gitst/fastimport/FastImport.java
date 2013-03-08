@@ -61,7 +61,7 @@ import com.starbase.util.OLEDate;
 public class FastImport {
     private static final String[] FILE_PROPS = { "Name", "ModifiedTime",
             "ModifiedUserID", "Comment", "DotNotation", "ItemDeletedTime",
-            "ItemDeletedUserID", "Executable", "FileSize" };
+            "ItemDeletedUserID", "Executable", "FileSize", "MD5" };
     private static final String[] FOLDER_PROPS = { "Name", "ModifiedTime",
             "ModifiedUserID", "Comment", "WorkingFolder", "DotNotation",
             "ItemDeletedTime", "ItemDeletedUserID" };
@@ -239,12 +239,62 @@ public class FastImport {
             public void run() {
                 try {
                     final Repo repo = getRepo();
-                    final CoListener l = new CoListener(repo, commits);
-                    final ItemList items = l.getItemList();
+                    
+                    final Map<RemoteFile, List<FileData>> filesMap = new HashMap<>();
+                    final ItemList itemList;
+                    final AtomicLong totalBytes = new AtomicLong();
+                    final ProgressBar pbar;
 
-                    if (items.size() > 0) {
-                        Utils.checkout(repo, items, l);
-                        l._pbar.complete();
+                    itemList = new ItemList();
+                    final Logger log = repo.getLogger();
+                    long size = 0;
+
+                    for (final Commit cmt : commits) {
+                        for (final FileChange c : cmt.getChanges()) {
+                            final FileData d;
+
+                            if (c instanceof FileModify) {
+                                d = ((FileModify) c).getFileData();
+                            } else if (c instanceof FileRename) {
+                                final FileModify mod = ((FileRename) c).getFileModify();
+
+                                if (mod != null) {
+                                    d = mod.getFileData();
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+
+                            final File f = d.getFile();
+                            final RemoteFile id = new RemoteFile(f);
+                            final List<FileData> old = filesMap.put(id,
+                                    Collections.singletonList(d));
+                            size += f.getSizeEx();
+
+                            if (old != null) {
+                                final List<FileData> newList = new ArrayList<>(
+                                        old.size() + 1);
+                                newList.addAll(old);
+                                newList.add(d);
+                                filesMap.put(id, newList);
+
+                                if (log.isWarnEnabled()) {
+                                    log.warn("Warning! File duplicated in several commits: "
+                                            + d.getPath());
+                                }
+                            }
+
+                            itemList.addItem(d.getFile());
+                        }
+                    }
+
+                    //_avgSize = Utils.bytesToString(size);
+                    pbar = repo.getLogger().createProgressBar("Items", itemList.size());
+
+                    if (itemList.size() > 0) {
+                        Utils.checkout(repo, itemList, filesMap, pbar);
                     }
                 } catch (final Throwable ex) {
                     getRepo().getLogger().error("Checkout failed", ex);
