@@ -362,8 +362,10 @@ public class FastImport {
         final Thread main = Thread.currentThread();
         final Item[] files = folder.getItems("File");
         final Folder[] folders = folder.getSubFolders();
+        final boolean skipEmptyDirs = "true".equalsIgnoreCase(System
+                .getenv("GITST_SKIP_EMPTY_DIRS"));
 
-        if (!isRecycle && (files.length == 0) && (folders.length == 0)) {
+        if (!skipEmptyDirs && !isRecycle && (files.length == 0) && (folders.length == 0)) {
             createEmptyDir(filter, commits, folder, false);
         }
 
@@ -586,6 +588,8 @@ public class FastImport {
     private void checkEmpty(final Folder folder, final Commit cmt,
             final ConcurrentMap<CommitId, Commit> commits) {
         final Repo repo = getRepo();
+        final boolean skipEmptyDirs = "true".equalsIgnoreCase(System
+                .getenv("GITST_SKIP_EMPTY_DIRS"));
 
         if (!folder.isDeleted() && repo.isEmpty(folder)) {
             final String path = getRepo().getPath(folder);
@@ -600,7 +604,8 @@ public class FastImport {
                     }
                 }
 
-                cmt.addChange(new EmptyDir(folder, path));
+                if (!skipEmptyDirs)
+                	cmt.addChange(new EmptyDir(folder, path));
             }
         }
     }
@@ -754,6 +759,8 @@ public class FastImport {
         private final ItemFilter _filter;
         private final Folder _rootFolder = _repo.getRootFolder();
         private final boolean _verbose = _log.isDebugEnabled();
+        private final boolean _skipEmptyFolders = "true".equalsIgnoreCase(System
+                .getenv("GIST_SKIP_EMPTY_FOLDERS"));
 
         public ViewListener(final ItemFilter filter) {
             _filter = filter;
@@ -881,7 +888,7 @@ public class FastImport {
                 if (files.size() == 0) {
                     final ItemList folders = folder.getList("Folder");
 
-                    if (folders.size() == 0) {
+                    if (!_skipEmptyFolders && folders.size() == 0) {
                         createEmptyDir(_filter, _commits, folder, _verbose);
                     }
                 }
