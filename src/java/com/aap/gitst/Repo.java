@@ -335,9 +335,13 @@ public class Repo implements AutoCloseable {
     
     public synchronized File getCacheDir() throws IOException {
         if (_cacheDir == null) {
-        	File homeDir = new File(System.getProperty("user.home"));
-        	File cacheDir = new File(new File(homeDir, ".git-st"), "cache");
-        	_cacheDir = cacheDir;
+            String cacheDirEnv = System.getenv("GITST_CACHE_DIR");
+            if (cacheDirEnv == null) {
+                File homeDir = new File(System.getProperty("user.home"));
+                _cacheDir = new File(new File(homeDir, ".git-st"), "cache");
+            } else {
+                _cacheDir = new File(cacheDirEnv);
+            }
 
             if (!_cacheDir.isDirectory() && !_cacheDir.mkdirs()) {
                 throw new IOException("Failed to create directory: "
