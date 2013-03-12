@@ -21,7 +21,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.StringTokenizer;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
@@ -55,7 +57,7 @@ public class Repo implements AutoCloseable {
     private final RepoProperties _repoProperties;
     private final Logger _logger;
     private final ConnectionPool _pool;
-    private final List<View> _viewCache;
+    private final TreeMap<ViewCacheKey,View> _viewCache;
     private final String _branchName;
     private final String _userNamePattern;
     private final Map<String, Folder> _folderCache;
@@ -74,7 +76,7 @@ public class Repo implements AutoCloseable {
         _repoProperties = repoProperties;
         _logger = logger;
         _pool = new ConnectionPool();
-        _viewCache = new ArrayList<>();
+        _viewCache = new TreeMap<>();
         _folderCache = new ConcurrentHashMap<>();
         _fileCache = new ConcurrentHashMap<>();
         //@formatter:off
@@ -282,26 +284,28 @@ public class Repo implements AutoCloseable {
 
     public synchronized View getView(View view, final double notBefore,
             final double before) {
-        for (final View v : _viewCache) {
-            final int id = v.getID();
-            if (id != view.getID())
-                continue;
-            
-            final double date = v.getConfiguration().getTime().getDoubleValue();
-
-            if ((date >= notBefore) && (date < before)) {
-                return v;
-            }
+        ViewCacheKey keyLow = new ViewCacheKey(view.getID(), notBefore);
+        ViewCacheKey keyHigh = new ViewCacheKey(view.getID(), before);
+        // find lowest entry on or after "notBefore" date
+        Entry<ViewCacheKey, View> candidate = _viewCache.floorEntry(keyLow);
+        // if it is also before "before" date, return it
+        if (candidate != null
+                && (candidate.getKey().equals(keyLow) || candidate.getKey()
+                        .compareTo(keyHigh) < 0)) {
+            return candidate.getValue();
         }
+        // otherwise, no such view matches, so create one
 
+        OLEDate notBeforeDate = new OLEDate(notBefore);
         if (_logger.isDebugEnabled()) {
-            _logger.debug("Creating view as of: " + before + ". Cache size: "
-                    + _viewCache.size() + ".");
+            _logger.debug("Creating " + view.getName() + " view as of: "
+                    + notBeforeDate + ". Cache size: " + _viewCache.size()
+                    + ".");
         }
 
         final View v = new View(view,
-                ViewConfiguration.createFromTime(new OLEDate(notBefore)));
-        _viewCache.add(v);
+                ViewConfiguration.createFromTime(notBeforeDate));
+        _viewCache.put(keyLow, v);
         return v;
     }
 
