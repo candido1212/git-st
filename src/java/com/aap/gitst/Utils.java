@@ -99,13 +99,13 @@ public class Utils {
             final com.starbase.starteam.ItemList list) {
         if (i.isDeleted()) {
             final double lastModified = i.getModifiedTime().getDoubleValue();
-            final double deletion = i.getDeletedTime().getDoubleValue();
             final double viewCreation = i.getView().getCreatedTime().getDoubleValue();
-            final double notBefore = (lastModified < viewCreation) ? viewCreation : lastModified;
+            final double before = i.getDeletedTime().getDoubleValue();
+            final double notBefore = Math.max(lastModified, viewCreation);
             
             final com.starbase.starteam.View historyView;
             
-            historyView = repo.getView(i.getView(), notBefore, deletion);
+            historyView = repo.getView(i.getView(), notBefore, before);
 
             // FIXME: this is a workaround to avoid unexpected failures
             // during checkout of deleted files.
