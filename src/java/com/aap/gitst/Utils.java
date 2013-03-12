@@ -90,16 +90,14 @@ public class Utils {
             final com.starbase.starteam.Item i,
             final com.starbase.starteam.ItemList list) {
         if (i.isDeleted()) {
-            final OLEDate lastModified = i.getModifiedTime();
-            final OLEDate beforeDeletion = new OLEDate(i.getDeletedTime()
-                    .getLongValue() - 1000);
+            final double lastModified = i.getModifiedTime().getDoubleValue();
+            final double deletion = i.getDeletedTime().getDoubleValue();
+            final double viewCreation = i.getView().getCreatedTime().getDoubleValue();
+            final double notBefore = (lastModified < viewCreation) ? viewCreation : lastModified;
+            
             final com.starbase.starteam.View historyView;
-
-            if (lastModified.getDoubleValue() > beforeDeletion.getDoubleValue()) {
-                historyView = repo.getView(lastModified, lastModified);
-            } else {
-                historyView = repo.getView(lastModified, beforeDeletion);
-            }
+            
+            historyView = repo.getView(i.getView(), notBefore, deletion);
 
             // FIXME: this is a workaround to avoid unexpected failures
             // during checkout of deleted files.
