@@ -7,7 +7,7 @@ Note: these instructions are for those who want to do a one-time migration to gi
 
 The following environment variables must be set:
 
-    export GITST_DEGBUG=true
+    export GITST_DEBUG=true
     export GITST_SKIP_EMPTY_DIRS=true
     export GITST_SKIP_DELETED=false
 
